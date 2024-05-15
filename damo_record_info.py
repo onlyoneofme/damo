@@ -10,14 +10,17 @@ import _damo_fmt_str
 import _damo_records
 
 class GuideInfo:
+    cid = None
     tid = None
     start_time = None
     end_time = None
     lowest_addr = None
     highest_addr = None
     gaps = None
+    nr_accesses = None
 
-    def __init__(self, tid, start_time):
+    def __init__(self, cid, tid, start_time):
+        self.cid = cid
         self.tid = tid
         self.start_time = start_time
         self.gaps = []
@@ -43,7 +46,7 @@ class GuideInfo:
         return ret
 
     def __str__(self):
-        lines = ['target_id:%d' % self.tid]
+        lines = ['context_id:%d target_id:%d' % (self.cid, self.tid)]
         lines.append('time: %d-%d (%s)' % (self.start_time, self.end_time,
                     _damo_fmt_str.format_time_ns(self.end_time - self.start_time,
                         False)))
@@ -73,16 +76,22 @@ def overlapping_regions(regions1, regions2):
             overlap_regions.append(r1)
     return overlap_regions
 
+def guide_idx(ctx_id, trg_id):
+    return str(ctx_id) + str(trg_id)
+
 def get_guide_info(records):
     "return the set of guide information for the moitoring result"
     guides = {}
     for record in records:
         for snapshot in record.snapshots:
             monitor_time = snapshot.end_time
+            cid = record.context_id
+            if not cid in guides:
+                guides[cid] = {}
             tid = record.target_id
-            if not tid in guides:
-                guides[tid] = GuideInfo(tid, monitor_time)
-            guide = guides[tid]
+            if not tid in guides[cid]:
+                guides[cid][tid] = GuideInfo(cid, tid, monitor_time)
+            guide = guides[cid][tid]
             guide.end_time = monitor_time
 
             last_addr = None
@@ -108,12 +117,16 @@ def get_guide_info(records):
             else:
                 guide.gaps = overlapping_regions(guide.gaps, gaps)
 
-    return sorted(list(guides.values()), key=lambda x: x.total_space(),
-                    reverse=True)
+    guide_lists = []
+    for guide in guides.values():
+        guide_lists.append(sorted(list(guide.values()), key=lambda x: x.total_space(),
+                                  reverse=True))
+    return guide_lists
 
 def pr_guide(records):
-    for guide in get_guide_info(records):
-        print(guide)
+    for context_guide in get_guide_info(records):
+        for target_guide in context_guide:
+            print(target_guide)
 
 def main(args):
     records, err = _damo_records.get_records(record_file=args.input)

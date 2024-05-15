@@ -109,6 +109,7 @@ def main(args):
     else:
         tracepoint = _damo_records.perf_event_damos_before_apply
 
+    print('args.profile: ' + str(args.profile))
     data_for_cleanup.record_handle = _damo_records.start_recording(
             tracepoint, args.out, args.output_type, args.output_permission,
             monitoring_intervals,

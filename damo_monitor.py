@@ -54,6 +54,9 @@ def main(args):
     else:
         report_cmd += ['report', 'wss']
 
+    print('record cmd: ' + str(record_cmd))
+    print('report cmd: ' + str(report_cmd))
+
     nr_reports = 0
     while not args.count or nr_reports < args.count:
         if (target_type == _damon_args.target_type_cmd and

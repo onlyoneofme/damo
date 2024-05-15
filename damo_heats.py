@@ -138,7 +138,7 @@ def heatmap_plot_ascii(pixels, time_range, addr_range, resols, colorset,
     if print_colorset:
         print('# access_frequency: %s' %
                 _damo_ascii_color.color_samples(colorset))
-    print('# x-axis: space (%d-%d: %s)' % (addr_range[0], addr_range[1],
+    print('# x-axis: space (%020d-%020d: %s)' % (addr_range[0], addr_range[1],
         _damo_fmt_str.format_sz(addr_range[1] - addr_range[0], False)))
     print('# y-axis: time (%d-%d: %s)' % (time_range[0], time_range[1],
         _damo_fmt_str.format_time_ns(time_range[1] - time_range[0], False)))
@@ -150,6 +150,7 @@ def heatmap_plot_ascii(pixels, time_range, addr_range, resols, colorset,
             float(time_range[1] - time_range[0]) / len(pixels), False)))
 
 def pr_heats(args, __records):
+    cid = args.cid
     tid = args.tid
     tres = args.resol[0]
     tmin = args.time_range[0]
@@ -169,7 +170,7 @@ def pr_heats(args, __records):
 
     records = []
     for record in __records:
-        if record.target_id == tid:
+        if record.context_id == cid and record.target_id == tid:
             records.append(record)
 
     for record in records:
@@ -194,23 +195,30 @@ def pr_heats(args, __records):
                 print('%s\t%s\t%s' % (time, addr, pixel.heat))
 
 def set_missed_args(args, records):
-    if args.tid and args.time_range and args.address_range:
+    if args.cid and args.tid and args.time_range and args.address_range:
         return
     guides = damo_record_info.get_guide_info(records)
-    guide = guides[0]
+    guide = guides[0][0]
+    if not args.cid:
+        args.cid = guide.cid
     if not args.tid:
         args.tid = guide.tid
-    for g in guides:
-        if g.tid == args.tid:
-            guide = g
-            break
+    for cg in guides:
+        for g in cg:
+            if g.tid == args.tid:
+                guide = g
+                break
 
     if not args.time_range:
         args.time_range = [guide.start_time, guide.end_time]
 
     if not args.address_range:
-        args.address_range = sorted(guide.regions(), key=lambda x: x[1] - x[0],
-                reverse=True)[0]
+        if args.sorted_by == 'nr_accesses':
+            args.address_range = sorted(guide.regions(), key=lambda x: x[1] - x[0],
+                    reverse=True)[0]
+        else:
+            args.address_range = sorted(guide.regions(), key=lambda x: x[1] - x[0],
+                    reverse=True)[0]
 
 def plot_range(orig_range, use_absolute_val):
     plot_range = [x for x in orig_range]
@@ -249,6 +257,8 @@ def set_argparser(parser):
     parser.add_argument('--input', '-i', type=str, metavar='<file>',
             default='damon.data', help='input file name')
 
+    parser.add_argument('--cid', metavar='<id>', type=int,
+            help='context id')
     parser.add_argument('--tid', metavar='<id>', type=int,
             help='target id')
     parser.add_argument('--resol', metavar='<resolution>', type=int, nargs=2,
@@ -278,7 +288,16 @@ def set_argparser(parser):
     parser.add_argument('--stdout_heatmap_skip_color_example',
             action='store_true',
             help='skip printing example colors at the output')
+    parser.add_argument('--sorted_by',
+            choices=['size', 'nr_accesses'], default='size',
+            help='plot the most fat (\'size\') or the most attractive (\'nr_accesses\'')
     parser.description = 'Show when which address ranges were how frequently accessed'
+
+def print_snapshots_regions(records):
+    for rc in records:
+        for s in rc.snapshots:
+            for r in s.regions:
+                print('[0x%x-0x%x]' % (r.start, r.end))
 
 def main(args=None):
     # --plot_ascii and --ascii_color is used in the demo screenshop[1].

@@ -66,16 +66,21 @@ class DamonRecord:
     context_idx = None
     intervals = None
     scheme_idx = None
+    context_id = None
     target_id = None
     snapshots = None
 
-    def __init__(self, kd_idx, ctx_idx, intervals, scheme_idx, target_id):
+    def __init__(self, kd_idx, ctx_idx, intervals, scheme_idx, context_id, target_id):
         self.kdamond_idx = kd_idx
         self.context_idx = ctx_idx
         self.intervals = intervals
         self.scheme_idx = scheme_idx
+        self.context_id = context_id
         self.target_id = target_id
         self.snapshots = []
+
+    def __str__(self):
+        return 'kdamond_idx={} context_id={} target_id={}'.format(self.kdamond_idx, self.context_id, self.target_id)
 
     @classmethod
     def from_kvpairs(cls, kv):
@@ -87,7 +92,7 @@ class DamonRecord:
         record = DamonRecord(kv['kdamond_idx'], kv['context_idx'],
                 _damon.DamonIntervals.from_kvpairs(kv['intervals'])
                 if kv['intervals'] != None else None,
-                kv['scheme_idx'], kv['target_id'])
+                kv['scheme_idx'], kv['context_id'], kv['target_id'])
         record.snapshots = [DamonSnapshot.from_kvpairs(s)
                 for s in kv['snapshots']]
 
@@ -100,6 +105,7 @@ class DamonRecord:
         ordered_dict['intervals'] = (self.intervals.to_kvpairs(raw)
                 if self.intervals != None else None)
         ordered_dict['scheme_idx'] = self.scheme_idx
+        ordered_dict['context_id'] = self.context_id
         ordered_dict['target_id'] = self.target_id
         ordered_dict['snapshots'] = [s.to_kvpairs(raw) for s in self.snapshots]
         return ordered_dict
@@ -197,11 +203,11 @@ def set_first_snapshot_start_time(records):
         if is_fake_snapshot(snapshots[-1]):
             del record.snapshots[-1]
 
-def record_of(target_id, records, intervals):
+def record_of(context_id, target_id, records, intervals):
     for record in records:
-        if record.target_id == target_id:
+        if record.context_id == context_id and record.target_id == target_id:
             return record
-    record = DamonRecord(None, None, intervals, None, target_id)
+    record = DamonRecord(None, None, intervals, None, context_id, target_id)
     records.append(record)
     return record
 
@@ -210,7 +216,7 @@ def parse_damon_aggregated_perf_script_fields(fields):
     The line is like below:
 
     kdamond.0  4452 [000] 82877.315633: damon:damon_aggregated: \
-            target_id=18446623435582458880 nr_regions=17 \
+            context_id=18446623435582458879 target_id=18446623435582458880 nr_regions=17 \
             140731667070976-140731668037632: 0 3
 
     Note that the last field is not in the early version[1].
@@ -218,23 +224,24 @@ def parse_damon_aggregated_perf_script_fields(fields):
     [1] https://lore.kernel.org/linux-mm/df8d52f1fb2f353a62ff34dc09fe99e32ca1f63f.1636610337.git.xhao@linux.alibaba.com/
     '''
 
-    if not len(fields) in [9, 10]:
+    if not len(fields) in [10, 11]:
         return None, None, None, None
 
     end_time = int(float(fields[3][:-1]) * 1000000000)
-    target_id = int(fields[5].split('=')[1])
-    nr_regions = int(fields[6].split('=')[1])
+    context_id = int(fields[5].split('=')[1])
+    target_id = int(fields[6].split('=')[1])
+    nr_regions = int(fields[7].split('=')[1])
 
-    start_addr, end_addr = [int(x) for x in fields[7][:-1].split('-')]
-    nr_accesses = int(fields[8])
-    if len(fields) == 10:
-        age = int(fields[9])
+    start_addr, end_addr = [int(x) for x in fields[8][:-1].split('-')]
+    nr_accesses = int(fields[9])
+    if len(fields) == 11:
+        age = int(fields[10])
     else:
         age = None
     region = _damon.DamonRegion(start_addr, end_addr, nr_accesses,
             _damon.unit_samples, age, _damon.unit_aggr_intervals)
 
-    return region, end_time, target_id, nr_regions
+    return region, end_time, context_id, target_id, nr_regions
 
 def parse_damos_before_apply_perf_script_fields(fields):
     '''
@@ -276,25 +283,25 @@ def parse_perf_script_line(line):
     '''
     fields = line.strip().split()
     if not len(fields) > 5:
-        return None, None, None, None
+        return None, None, None, None, None
     traceevent = fields[4][:-1]
     if traceevent == perf_event_damon_aggregated:
         return parse_damon_aggregated_perf_script_fields(fields)
     elif traceevent == perf_event_damos_before_apply:
         return parse_damos_before_apply_perf_script_fields(fields)
     else:
-        return None, None, None, None
+        return None, None, None, None, None
 
 def parse_perf_script(script_output, monitoring_intervals):
     records = []
     snapshot = None
 
     for line in script_output.split('\n'):
-        region, end_time, target_id, nr_regions = parse_perf_script_line(line)
+        region, end_time, context_id, target_id, nr_regions = parse_perf_script_line(line)
         if region == None:
             continue
 
-        record = record_of(target_id, records, monitoring_intervals)
+        record = record_of(context_id, target_id, records, monitoring_intervals)
         if len(record.snapshots) == 0:
             start_time = None
         else:
@@ -431,7 +438,7 @@ def write_perf_script(records, file_path):
     Example of the normal perf script output:
 
     kdamond.0  4452 [000] 82877.315633: damon:damon_aggregated: \
-            target_id=18446623435582458880 nr_regions=17 \
+            context_id=18446623435582458880 target_id=18446623435582458880 nr_regions=17 \
             140731667070976-140731668037632: 0 3
     '''
 
@@ -444,6 +451,7 @@ def write_perf_script(records, file_path):
                     f.write(' '.join(['kdamond.x', 'xxxx', 'xxxx',
                         '%f:' % (snapshot.end_time / 1000000000.0),
                         'damon:damon_aggregated:',
+                        'context_id=%s' % record.context_id,
                         'target_id=%s' % record.target_id,
                         'nr_regions=%d' % len(snapshot.regions),
                         '%d-%d: %d %s' % (region.start, region.end,
@@ -678,8 +686,10 @@ later.
 def start_recording(tracepoint, file_path, file_format, file_permission,
                     monitoring_intervals, profile, profile_target_pid,
                     kdamonds, poll_add_child_tasks, poll_add_mem_footprint):
-    pipe = subprocess.Popen(
-            [PERF, 'record', '-a', '-e', tracepoint, '-o', file_path])
+    print('profile: ' + str(profile))
+    perf_cmd = [PERF, 'record', '-a', '-e', tracepoint, '-o', file_path]
+    print('perf cmd: ' + str(perf_cmd))
+    pipe = subprocess.Popen(perf_cmd)
     profile_pipe = None
     if profile is True:
         cmd = [PERF, 'record', '-o', '%s.profile' % file_path]
